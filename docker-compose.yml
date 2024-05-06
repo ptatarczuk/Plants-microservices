@@ -1,0 +1,246 @@
+version: '3'
+services:
+
+  # Postgres db for plant, user, users-plant services
+  plant-db:
+    container_name: plant-db
+    image: postgres
+    environment:
+      POSTGRES_DB: ${PLANTS_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /data/postgres
+    volumes:
+      - /data/postgres
+    expose:
+      - "5431"
+    ports:
+      - "5431:5431"
+    command: -p 5431
+    restart: always
+
+  # Postgres db for chat service
+  chat-db:
+    container_name: chat-db
+    image: postgres
+    environment:
+      POSTGRES_DB: ${CHAT_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /data/postgres
+    volumes:
+      - /data/postgres
+    expose:
+      - "5433"
+    ports:
+      - "5433:5433"
+    command: -p 5433
+    restart: always
+
+
+  ## Postgres db for notification service
+  notifications-db:
+    container_name: notifications-db
+    image: postgres
+    environment:
+      POSTGRES_DB: ${NOTIFICATIONS_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /data/postgres
+    volumes:
+      - /data/postgres
+    ports:
+      - "5432:5432"
+    restart: always
+
+  ## Kafka zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    restart: always
+
+  ## Kafka broker
+  broker:
+    image: confluentinc/cp-kafka
+    container_name: broker
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://broker:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+  ## Zipkin
+  zipkin:
+    image: openzipkin/zipkin
+    container_name: zipkin
+    ports:
+      - "9411:9411"
+
+  ## Eureka Server
+  discovery-server:
+    image: asynoradzki/discovery-server
+    container_name: discovery-server
+    ports:
+      - "8761:8761"
+    expose:
+      - "8761"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8761 # to be deleted
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans # to be deleted
+    depends_on:
+      - zipkin
+
+  ## Api gateway 8080
+  api-gateway:
+    image: asynoradzki/api-gateway
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    expose:
+      - "8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://plant-db:5431/${PLANTS_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK: TRACE
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://discovery-server:8761/eureka # to be deleted
+      #      SPRING_CLOUD_GATEWAY_ROUTES_5_URI: http://discovery-server:8761
+      #      SPRING_CLOUD_GATEWAY_ROUTES_6_URI: http://discovery-server:8761
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans # to be deleted
+      SERVER_PORT: 8080 # to be deleted
+    depends_on:
+      - plant-db
+      - discovery-server
+
+  ## Authentication service - UWAGA application-docker.properites
+  authentication-service:
+    image: asynoradzki/authentication-service
+    container_name: authentication-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK: WARN
+      APPLICATION_AUTHORIZEDREDIRECTURIS: http://localhost:5173/oauth2/redirect
+      SPRING_DATASOURCE_URL: jdbc:postgresql://plant-db:5431/${PLANTS_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SERVER_PORT: 8080 # to be deleted
+      #      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_REDIRECTURI: http://simple-auth.me/oauth2/callback/{registrationId}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_REDIRECTURI: http://localhost:8080/oauth2/callback/{registrationId} # to be deleted
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET}
+      GOOGLE_RECAPTCHA_SECRET: ${GOOGLE_RECAPTCHA_SECRET}
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://discovery-server:8761/eureka # to be deleted
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans # to be deleted
+    depends_on:
+      - api-gateway
+
+  ## Plant service - UWAGA porty
+  plant-service:
+    image: asynoradzki/plant-service
+    container_name: plant-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://plant-db:5431/${PLANTS_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://discovery-server:8761/eureka # to be deleted
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans # to be deleted
+      SERVER_PORT: 8080 # to be deleted
+    depends_on:
+      - authentication-service
+
+  ## Chat service - UWAGA porty
+  chat-service:
+    image: asynoradzki/chat-service
+    container_name: chat-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://chat-db:5433/${CHAT_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://discovery-server:8761/eureka # to be deleted
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans # to be deleted
+      SERVER_PORT: 8080 # to be deleted
+    depends_on:
+      - authentication-service
+
+  ## User service - UWAGA porty
+  user-service:
+    image: asynoradzki/user-service
+    container_name: user-service
+    #    ports:
+    #      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://plant-db:5431/${PLANTS_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://discovery-server:8761/eureka # to be deleted
+      SERVER_PORT: 8080 # or 8081 to be deleted
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans # to be deleted
+    depends_on:
+      - plant-service
+
+  ## Users plant service - UWAGA porty
+  users-plant-service:
+    image: asynoradzki/users-plant-service
+    container_name: users-plant-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://plant-db:5431/${PLANTS_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://discovery-server:8761/eureka # to be deleted
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans  # to be deleted
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: broker:29092 # to be deleted
+      SERVER_PORT: 8080 # to be deleted
+    depends_on:
+      - broker
+      - user-service
+
+  ## Notification service
+  notification-service:
+    image: asynoradzki/notification-service
+    container_name: notification-service
+    #    pull_policy: always
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATASOURCE_URL: jdbc:postgresql://notifications-db:5432/${NOTIFICATIONS_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_MAIL_USERNAME: ${MAIL_SENDER_USERNAME}
+      SPRING_MAIL_PASSWORD: ${MAIL_SENDER_PASSWORD}
+      EUREKA_CLIENT_SERVICE_URL_DEFAULTZONE: http://discovery-server:8761/eureka # to be deleted
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans # to be deleted
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: broker:29092  # to be deleted
+      SERVER_PORT: 8080 # to be deleted
+    depends_on:
+      - notifications-db
+      - users-plant-service
+
+  react-app:
+    build: ./client/.
+    container_name: react-app
+    environment:
+      VITE_RECAPTCHA_SITE_KEY: ${GOOGLE_RECAPTCHA_SITE_KEY}
+    ports:
+      - '5173:5173'
+    restart: always
+    depends_on:
+      - notification-service
+
+
